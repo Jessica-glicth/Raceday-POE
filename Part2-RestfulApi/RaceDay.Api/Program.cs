@@ -12,15 +12,24 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers()
     .AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
-// ---------- Database (EF Core Code-First, SQL Server) ----------
-// The "Testing" environment is used by the unit tests, which register an in-memory database instead.
+builder.Services.AddSingleton<IPasswordService, PasswordService>();
+builder.Services.Configure<AzureStorageOptions>(builder.Configuration.GetSection("AzureStorage"));
+
+// The "Testing" environment is used by the unit tests, which register an in-memory database
+// and an in-memory blob store instead.
 if (!builder.Environment.IsEnvironment("Testing"))
 {
+    // ---------- Database (EF Core Code-First, SQL Server) ----------
     builder.Services.AddDbContext<RaceDayDbContext>(options =>
         options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
-}
 
-builder.Services.AddSingleton<IPasswordService, PasswordService>();
+    // ---------- Azure Blob Storage ----------
+    var storageConnection = builder.Configuration["AzureStorage:ConnectionString"];
+    if (string.IsNullOrWhiteSpace(storageConnection))
+        builder.Services.AddSingleton<IBlobStorageService, UnconfiguredBlobStorageService>();
+    else
+        builder.Services.AddSingleton<IBlobStorageService, AzureBlobStorageService>();
+}
 
 // ---------- Session authentication (server-issued, encrypted session cookie) ----------
 builder.Services
@@ -68,24 +77,46 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
-// ---------- Create / migrate the database and seed ----------
+// ---------- Create / migrate the database and seed (retries while SQL Server starts, e.g. in Docker) ----------
 using (var scope = app.Services.CreateScope())
 {
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
     var db = scope.ServiceProvider.GetRequiredService<RaceDayDbContext>();
+    var hasher = scope.ServiceProvider.GetRequiredService<IPasswordService>();
 
-    if (db.Database.IsRelational() && db.Database.GetMigrations().Any())
-        db.Database.Migrate();
-    else
-        db.Database.EnsureCreated();
+    for (var attempt = 1; ; attempt++)
+    {
+        try
+        {
+            if (db.Database.IsRelational() && db.Database.GetMigrations().Any())
+                db.Database.Migrate();
+            else
+                db.Database.EnsureCreated();
 
-    if (app.Configuration.GetValue("SeedData", true))
-        DbSeeder.Seed(db, scope.ServiceProvider.GetRequiredService<IPasswordService>());
+            // Part 3 added two nullable image columns. If the database was created by Part 2, add them in place.
+            if (db.Database.IsSqlServer())
+            {
+                db.Database.ExecuteSqlRaw("IF COL_LENGTH('dbo.Event', 'BannerBlobName') IS NULL ALTER TABLE dbo.Event ADD BannerBlobName NVARCHAR(200) NULL;");
+                db.Database.ExecuteSqlRaw("IF COL_LENGTH('dbo.Participant', 'ProfilePictureBlobName') IS NULL ALTER TABLE dbo.Participant ADD ProfilePictureBlobName NVARCHAR(200) NULL;");
+            }
+
+            if (app.Configuration.GetValue("SeedData", true))
+                DbSeeder.Seed(db, hasher);
+
+            break;
+        }
+        catch (Exception ex) when (attempt < 45 && !app.Environment.IsEnvironment("Testing"))
+        {
+            logger.LogWarning(ex, "Database not ready (attempt {Attempt}/45). Retrying in 2 seconds...", attempt);
+            Thread.Sleep(TimeSpan.FromSeconds(2));
+        }
+    }
 }
 
 app.UseSwagger();
 app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "RaceDay API v1"));
 
-if (!app.Environment.IsEnvironment("Testing"))
+if (app.Configuration.GetValue("UseHttpsRedirection", false) && !app.Environment.IsEnvironment("Testing"))
     app.UseHttpsRedirection();
 
 app.UseAuthentication();
