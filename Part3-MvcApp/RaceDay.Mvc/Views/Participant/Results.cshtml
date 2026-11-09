@@ -1,0 +1,60 @@
+@model List<ResultDto>
+@{
+    ViewData["Title"] = "My results";
+}
+<div class="container">
+    <div class="rd-page-header">
+        <h1>My results</h1>
+        <div class="sub">Your race history across every completed event.</div>
+    </div>
+
+    @if (Model.Count == 0)
+    {
+        <div class="rd-card">
+            <div class="empty-state">
+                <div class="big">No results yet</div>
+                <p>Once an organiser records your finish time, it will show up here.</p>
+                <a class="btn btn-rd" asp-controller="Participant" asp-action="Entries">View my entries</a>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-md-3"><div class="stat-tile"><div class="num">@Model.Count</div><div class="label">Races finished</div></div></div>
+            <div class="col-6 col-md-3">
+                <div class="stat-tile alt">
+                    <div class="num">@(Model.Count(r => r.Position == 1))</div>
+                    <div class="label">Wins</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rd-table-wrap">
+            <div class="table-responsive">
+                <table class="table rd-table table-hover">
+                    <thead><tr><th>Event</th><th>Date</th><th>Category</th><th>Finish time</th><th>Position</th></tr></thead>
+                    <tbody>
+                    @foreach (var r in Model)
+                    {
+                        <tr>
+                            <td><a class="fw-semibold text-decoration-none" asp-controller="Events" asp-action="Details" asp-route-id="@r.EventID">@r.EventName</a></td>
+                            <td>@Fmt.Date(r.EventDate)</td>
+                            <td>@r.CategoryName</td>
+                            <td class="fw-semibold">@Fmt.Time(r.FinishTime)</td>
+                            <td>
+                                @if (r.Position.HasValue)
+                                {
+                                    <span class="fw-bold">@Fmt.Ordinal(r.Position.Value)</span>
+                                    @if (r.TotalFinishers > 0) { <span class="text-secondary"> out of @r.TotalFinishers</span> }
+                                }
+                                else { <span class="text-secondary">-</span> }
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+</div>

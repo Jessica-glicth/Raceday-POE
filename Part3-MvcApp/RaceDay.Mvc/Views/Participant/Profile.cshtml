@@ -1,0 +1,67 @@
+@model ParticipantProfileViewModel
+@{
+    ViewData["Title"] = "My profile";
+    var initials = (Model.FirstName.Length > 0 ? Model.FirstName[..1] : "") + (Model.LastName.Length > 0 ? Model.LastName[..1] : "");
+}
+<div class="container">
+    <div class="rd-page-header"><h1>My profile</h1><div class="sub">Update your details and profile picture.</div></div>
+
+    <div class="row g-4">
+        <div class="col-lg-4">
+            <div class="rd-card text-center">
+                <div class="rd-card-body p-4">
+                    @if (Model.HasProfilePicture)
+                    {
+                        <img class="profile-pic mb-3" src="@Url.Action("ProfilePicture", "Images", new { v = DateTime.UtcNow.Ticks })" alt="Your profile picture" />
+                    }
+                    else
+                    {
+                        <div class="profile-pic-placeholder mx-auto mb-3">@initials.ToUpperInvariant()</div>
+                    }
+
+                    <form asp-action="UploadPicture" method="post" enctype="multipart/form-data">
+                        <input class="form-control form-control-sm mb-2" type="file" name="picture" accept=".jpg,.jpeg,.png,.gif,.webp,image/*" required />
+                        <div class="form-text mb-2">JPG, PNG, GIF or WEBP, up to 5 MB.</div>
+                        <button type="submit" class="btn btn-rd btn-sm w-100">Upload picture</button>
+                    </form>
+
+                    @if (Model.HasProfilePicture)
+                    {
+                        <form asp-action="RemovePicture" method="post" class="mt-2">
+                            <button type="submit" class="btn btn-outline-danger btn-sm w-100">Remove picture</button>
+                        </form>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="rd-card">
+                <div class="rd-card-body p-4">
+                    <form asp-action="Profile" method="post" novalidate>
+                        <div asp-validation-summary="ModelOnly" class="alert alert-danger"></div>
+                        <input type="hidden" asp-for="HasProfilePicture" />
+                        <div class="row g-3">
+                            <div class="col-sm-6">
+                                <label asp-for="FirstName" class="form-label"></label>
+                                <input asp-for="FirstName" class="form-control" />
+                                <span asp-validation-for="FirstName" class="text-danger small"></span>
+                            </div>
+                            <div class="col-sm-6">
+                                <label asp-for="LastName" class="form-label"></label>
+                                <input asp-for="LastName" class="form-control" />
+                                <span asp-validation-for="LastName" class="text-danger small"></span>
+                            </div>
+                            <div class="col-12">
+                                <label asp-for="Email" class="form-label"></label>
+                                <input asp-for="Email" class="form-control" readonly />
+                                <div class="form-text">Your email is your login and can't be changed here.</div>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-rd mt-4">Save changes</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
