@@ -5,6 +5,7 @@ using RaceDay.Api.Data;
 using RaceDay.Api.Dtos;
 using RaceDay.Api.Extensions;
 using RaceDay.Api.Models;
+using RaceDay.Api.Services;
 
 namespace RaceDay.Api.Controllers;
 
@@ -13,14 +14,22 @@ namespace RaceDay.Api.Controllers;
 public class EventsController : ControllerBase
 {
     private readonly RaceDayDbContext _db;
-    public EventsController(RaceDayDbContext db) => _db = db;
+    private readonly IBlobStorageService _storage;
+    private readonly ILogger<EventsController> _logger;
 
-    /// <summary>Lists all events. Optional filters: date, location, eventType.</summary>
+    public EventsController(RaceDayDbContext db, IBlobStorageService storage, ILogger<EventsController> logger)
+    {
+        _db = db;
+        _storage = storage;
+        _logger = logger;
+    }
+
+    /// <summary>Lists events. Optional filters: date, location, eventType, upcoming (only events today or later).</summary>
     [HttpGet]
     [AllowAnonymous]
     [ProducesResponseType(typeof(List<EventResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<List<EventResponse>>> GetAll(
-        [FromQuery] DateTime? date, [FromQuery] string? location, [FromQuery] EventType? eventType)
+        [FromQuery] DateTime? date, [FromQuery] string? location, [FromQuery] EventType? eventType, [FromQuery] bool? upcoming)
     {
         IQueryable<Event> query = _db.Events.AsNoTracking().WithDetails();
 
@@ -28,6 +37,11 @@ public class EventsController : ControllerBase
         {
             var d = DateOnly.FromDateTime(date.Value);
             query = query.Where(e => e.EventDate == d);
+        }
+        if (upcoming == true)
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            query = query.Where(e => e.EventDate >= today);
         }
         if (!string.IsNullOrWhiteSpace(location))
             query = query.Where(e => e.Location != null && e.Location.Contains(location));
@@ -101,7 +115,7 @@ public class EventsController : ControllerBase
         return ev.ToResponse();
     }
 
-    /// <summary>Deletes an event (and its categories, entries and results) owned by the logged-in Organiser.</summary>
+    /// <summary>Deletes an event (and its categories, entries, results and banner) owned by the logged-in Organiser.</summary>
     [HttpDelete("{id:int}")]
     [Authorize(Roles = Roles.Organiser)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
@@ -116,8 +130,102 @@ public class EventsController : ControllerBase
         if (ev == null) return NotFound();
         if (ev.OrganiserID != User.GetUserId()) return Forbid();
 
+        var bannerBlob = ev.BannerBlobName;
         _db.Events.Remove(ev);   // cascades to categories, entries and results
         await _db.SaveChangesAsync();
+
+        await _storage.TryDeleteAsync(bannerBlob, _logger);
+        return NoContent();
+    }
+
+    /// <summary>Uploads (or replaces) the event banner image in Azure Blob Storage. Organiser who owns the event only.</summary>
+    /// <remarks>Send multipart/form-data with a single file field named "file". JPG, PNG, GIF or WEBP, max 5 MB.</remarks>
+    [HttpPost("{id:int}/banner")]
+    [Authorize(Roles = Roles.Organiser)]
+    [Consumes("multipart/form-data")]
+    [ProducesResponseType(typeof(EventResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+    public async Task<ActionResult<EventResponse>> UploadBanner(int id, IFormFile file)
+    {
+        var ev = await _db.Events.WithDetails().FirstOrDefaultAsync(e => e.EventID == id);
+        if (ev == null) return NotFound();
+        if (ev.OrganiserID != User.GetUserId()) return Forbid();
+
+        var error = ImageUpload.Validate(file, out var extension, out var contentType);
+        if (error != null)
+        {
+            ModelState.AddModelError("file", error);
+            return ValidationProblem(ModelState);
+        }
+
+        var newBlobName = $"banners/event-{id}-{Guid.NewGuid():N}{extension}";
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            await _storage.UploadAsync(newBlobName, stream, contentType);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Banner upload failed for event {EventId}", id);
+            return this.StorageUnavailable();
+        }
+
+        var oldBlobName = ev.BannerBlobName;
+        ev.BannerBlobName = newBlobName;
+        await _db.SaveChangesAsync();
+
+        await _storage.TryDeleteAsync(oldBlobName, _logger);
+        return ev.ToResponse();
+    }
+
+    /// <summary>Downloads the event banner image (served through the API from Azure Blob Storage).</summary>
+    [HttpGet("{id:int}/banner")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> GetBanner(int id)
+    {
+        var ev = await _db.Events.AsNoTracking().FirstOrDefaultAsync(e => e.EventID == id);
+        if (ev?.BannerBlobName == null) return NotFound();
+
+        BlobContent? blob;
+        try
+        {
+            blob = await _storage.DownloadAsync(ev.BannerBlobName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Banner download failed for event {EventId}", id);
+            return this.StorageUnavailable();
+        }
+
+        if (blob == null) return NotFound();
+        return File(blob.Content, blob.ContentType);
+    }
+
+    /// <summary>Removes the event banner. Organiser who owns the event only.</summary>
+    [HttpDelete("{id:int}/banner")]
+    [Authorize(Roles = Roles.Organiser)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteBanner(int id)
+    {
+        var ev = await _db.Events.FirstOrDefaultAsync(e => e.EventID == id);
+        if (ev == null) return NotFound();
+        if (ev.OrganiserID != User.GetUserId()) return Forbid();
+
+        var blobName = ev.BannerBlobName;
+        ev.BannerBlobName = null;
+        await _db.SaveChangesAsync();
+
+        await _storage.TryDeleteAsync(blobName, _logger);
         return NoContent();
     }
 }
