@@ -96,8 +96,9 @@ public class EntriesController : ControllerBase
 
         await RecalculatePositionsAsync(entry.CategoryID);
 
+        var total = await _db.Results.CountAsync(r => r.EventEntry.CategoryID == entry.CategoryID && r.FinishTime != null);
         var created = await _db.Results.AsNoTracking().WithDetails().FirstAsync(r => r.ResultID == result.ResultID);
-        return StatusCode(StatusCodes.Status201Created, created.ToResponse());
+        return StatusCode(StatusCodes.Status201Created, created.ToResponse(total));
     }
 
     /// <summary>Ranks every finished result in the category by finish time (1 = fastest).</summary>

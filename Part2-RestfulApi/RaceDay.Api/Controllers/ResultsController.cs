@@ -26,8 +26,12 @@ public class ResultsController : ControllerBase
             .Where(r => r.EventEntry.Category.EventID == id)
             .ToListAsync();
 
+        var totals = results
+            .GroupBy(r => r.EventEntry.CategoryID)
+            .ToDictionary(g => g.Key, g => g.Count(x => x.FinishTime != null));
+
         return results
-            .Select(r => r.ToResponse())
+            .Select(r => r.ToResponse(totals[r.EventEntry.CategoryID]))
             .GroupBy(r => new { r.CategoryID, r.CategoryName })
             .OrderBy(g => g.Key.CategoryName)
             .Select(g => new CategoryResultsResponse(
@@ -49,6 +53,7 @@ public class ResultsController : ControllerBase
             .Where(r => r.EventEntry.CategoryID == id)
             .ToListAsync();
 
-        return results.OrderBy(r => r.FinishTime).Select(r => r.ToResponse()).ToList();
+        var total = results.Count(r => r.FinishTime != null);
+        return results.OrderBy(r => r.FinishTime).Select(r => r.ToResponse(total)).ToList();
     }
 }
