@@ -24,6 +24,10 @@ public class Event
 
     public EventType EventType { get; set; }
 
+    /// <summary>Name of the banner image blob in Azure Blob Storage (null when no banner has been uploaded).</summary>
+    [MaxLength(200)]
+    public string? BannerBlobName { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public ICollection<Category> Categories { get; set; } = new List<Category>();

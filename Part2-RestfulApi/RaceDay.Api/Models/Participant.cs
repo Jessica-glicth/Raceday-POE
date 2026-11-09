@@ -18,6 +18,10 @@ public class Participant
     [Required, MaxLength(255)]
     public string PasswordHash { get; set; } = string.Empty;
 
+    /// <summary>Name of the profile picture blob in Azure Blob Storage (null when none uploaded).</summary>
+    [MaxLength(200)]
+    public string? ProfilePictureBlobName { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public ICollection<EventEntry> EventEntries { get; set; } = new List<EventEntry>();
