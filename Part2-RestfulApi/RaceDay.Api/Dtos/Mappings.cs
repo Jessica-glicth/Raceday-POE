@@ -13,25 +13,35 @@ public static class Mappings
         => new(e.EventID, e.OrganiserID,
                $"{e.Organiser.FirstName} {e.Organiser.LastName}",
                e.EventName, e.Description, e.EventDate, e.Location, e.Distance, e.EventType,
+               e.BannerBlobName != null,
                e.Categories.OrderBy(c => c.CategoryName).Select(c => c.ToResponse()).ToList());
 
-    /// <summary>Requires Participant and Category.Event to be loaded.</summary>
+    /// <summary>Requires Participant, Result and Category.Event to be loaded.</summary>
     public static EntryResponse ToResponse(this EventEntry en)
         => new(en.EventEntryID, en.ParticipantID,
                $"{en.Participant.FirstName} {en.Participant.LastName}",
-               en.Category.EventID, en.Category.Event.EventName, en.Category.Event.EventDate,
-               en.CategoryID, en.Category.CategoryName, en.EntryDate);
+               en.Category.EventID, en.Category.Event.EventName, en.Category.Event.EventDate, en.Category.Event.Location,
+               en.CategoryID, en.Category.CategoryName, en.EntryDate,
+               EntryStatus(en), en.Result?.FinishTime, en.Result?.Position);
 
     /// <summary>Requires EventEntry.Participant and EventEntry.Category.Event to be loaded.</summary>
-    public static ResultResponse ToResponse(this Result r)
+    public static ResultResponse ToResponse(this Result r, int totalFinishers = 0)
         => new(r.ResultID, r.EventEntryID, r.EventEntry.ParticipantID,
                $"{r.EventEntry.Participant.FirstName} {r.EventEntry.Participant.LastName}",
-               r.EventEntry.Category.EventID, r.EventEntry.Category.Event.EventName,
+               r.EventEntry.Category.EventID, r.EventEntry.Category.Event.EventName, r.EventEntry.Category.Event.EventDate,
                r.EventEntry.CategoryID, r.EventEntry.Category.CategoryName,
-               r.FinishTime, r.Position, r.Status);
+               r.FinishTime, r.Position, totalFinishers, r.Status);
+
+    private static string EntryStatus(EventEntry en)
+    {
+        if (en.Result?.FinishTime != null) return "Completed";
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        return en.Category.Event.EventDate < today ? "Awaiting Results" : "Confirmed";
+    }
 
     public static IQueryable<EventEntry> WithDetails(this IQueryable<EventEntry> q)
         => q.Include(e => e.Participant)
+            .Include(e => e.Result)
             .Include(e => e.Category).ThenInclude(c => c.Event);
 
     public static IQueryable<Result> WithDetails(this IQueryable<Result> q)
